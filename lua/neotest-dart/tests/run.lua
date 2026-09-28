@@ -70,8 +70,9 @@ test('parser handles generic dart test filenames in diagnostics', function()
     return {
       fn = {
         tempname = function()
-          return '/tmp/neotest-dart-output'
+          return vim.fn.tempname()
         end,
+        writefile = vim.fn.writefile,
       },
     }
   end
@@ -111,11 +112,26 @@ test('parser handles generic dart test filenames in diagnostics', function()
     }),
   }
 
-  local results = parser.parse_lines(tree, lines, {}, { write_output = false })
+  local results = parser.parse_lines(tree, lines, {})
   local result = results['/tmp/project/test/foo_test.dart::"group"::"works"']
   assert_eq(result.status, 'failed')
   assert_eq(result.errors[1].line, 11)
-  assert(result.output:match('Elapsed: 0%.042s%.'), 'Expected elapsed time in in-memory output')
+  local output = table.concat(vim.fn.readfile(result.output), '\n')
+  assert(output:match('Elapsed: 0%.042s%.'), 'Expected elapsed time in output file')
+
+  local id = '/tmp/project/test/foo_test.dart::"group"::"works"'
+  local output_files = {}
+  local first = parser.parse_lines(tree, lines, {}, output_files)
+  assert_eq(output_files[id].path, first[id].output)
+
+  vim.fn.writefile({ 'sentinel' }, first[id].output)
+  parser.parse_lines(tree, lines, {}, output_files)
+  assert_eq(vim.fn.readfile(first[id].output), { 'sentinel' })
+
+  table.insert(lines, 'not json')
+  local third = parser.parse_lines(tree, lines, {}, output_files)
+  assert_eq(third[id].output, first[id].output)
+  assert_eq(vim.fn.readfile(third[id].output)[1], 'not json')
 end)
 
 test('parser matches runtime tests by location instead of name', function()
@@ -124,8 +140,9 @@ test('parser matches runtime tests by location instead of name', function()
     return {
       fn = {
         tempname = function()
-          return '/tmp/neotest-dart-output'
+          return vim.fn.tempname()
         end,
+        writefile = vim.fn.writefile,
       },
     }
   end
@@ -177,7 +194,7 @@ test('parser matches runtime tests by location instead of name', function()
     }),
   }
 
-  local results = parser.parse_lines(tree, lines, {}, { write_output = false })
+  local results = parser.parse_lines(tree, lines, {})
   local result = results['/tmp/project/test/foo_test.dart::"works"']
   assert(result, 'Expected runtime test to be matched by location')
   assert_eq(result.status, 'passed')
@@ -189,8 +206,9 @@ test('parser aggregates multiple runtime tests from same source location', funct
     return {
       fn = {
         tempname = function()
-          return '/tmp/neotest-dart-output'
+          return vim.fn.tempname()
         end,
+        writefile = vim.fn.writefile,
       },
     }
   end
@@ -270,11 +288,12 @@ test('parser aggregates multiple runtime tests from same source location', funct
     }),
   }
 
-  local results = parser.parse_lines(tree, lines, {}, { write_output = false })
+  local results = parser.parse_lines(tree, lines, {})
   local result = results['/tmp/project/test/foo_test.dart::"loop"']
   assert(result, 'Expected loop-generated tests to be aggregated')
   assert_eq(result.status, 'failed')
-  assert(result.output:match('Expected true but was false'), 'Expected combined failure output')
+  local output = table.concat(vim.fn.readfile(result.output), '\n')
+  assert(output:match('Expected true but was false'), 'Expected combined failure output')
   assert_eq(result.errors[1].line, 13)
 end)
 
@@ -291,7 +310,7 @@ test('adapter respects use_lsp and avoids duplicate wrapping', function()
 
   local autocmd_callback
   local autocmd_count = 0
-  local parser_opts
+  local parser_output_files
   local outline_parse_calls = 0
   local client = {
     id = 7,
@@ -362,8 +381,8 @@ test('adapter respects use_lsp and avoids duplicate wrapping', function()
   end
   package.preload['neotest-dart.parser'] = function()
     return {
-      parse_lines = function(_, _, _, opts)
-        parser_opts = opts
+      parse_lines = function(_, _, _, output_files)
+        parser_output_files = output_files
         return {}
       end,
     }
@@ -433,7 +452,17 @@ test('adapter respects use_lsp and avoids duplicate wrapping', function()
       return { vim.json.encode({ event = 'testStart' }) }
     end)
     stream()
-    assert_eq(parser_opts.write_output, false)
+    assert_eq(spec.cwd, '/tmp/project')
+    assert(
+      parser_output_files == spec.context.output_files,
+      'Expected stream to reuse per-run output paths'
+    )
+    parser_output_files = nil
+    adapter.results(spec, { output = '/tmp/neotest-dart-results' }, {})
+    assert(
+      parser_output_files == spec.context.output_files,
+      'Expected results to reuse per-run output paths'
+    )
   end)
 
   vim.api.nvim_create_autocmd = original_create_autocmd

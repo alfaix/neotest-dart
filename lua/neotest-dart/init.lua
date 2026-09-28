@@ -1,4 +1,3 @@
-local async = require('neotest.async')
 local Path = require('plenary.path')
 local lib = require('neotest.lib')
 local utils = require('neotest-dart.utils')
@@ -165,7 +164,7 @@ end
 ---@return neotest.RunSpec
 function adapter.build_spec(args)
   local partial_output = {}
-  local results_path = async.fn.tempname()
+  local output_files = {}
   local tree = args.tree
   if not tree then
     return {}
@@ -225,8 +224,9 @@ function adapter.build_spec(args)
 
   return {
     command = full_command,
+    cwd = adapter.root(position.path),
     context = {
-      results_path = results_path,
+      output_files = output_files,
       file = position.path,
     },
     strategy = strategy_config,
@@ -236,7 +236,7 @@ function adapter.build_spec(args)
         for _, line in ipairs(lines) do
           table.insert(partial_output, line)
         end
-        local tests = parser.parse_lines(tree, partial_output, outline, { write_output = false })
+        local tests = parser.parse_lines(tree, partial_output, outline, output_files)
         return tests
       end
     end,
@@ -278,17 +278,17 @@ local function register_lsp_outline_handler()
 end
 
 ---@async
----@param _ neotest.RunSpec
+---@param spec neotest.RunSpec
 ---@param result neotest.StrategyResult
 ---@param tree neotest.Tree
 ---@return table<string, neotest.Result[]>
-function adapter.results(_, result, tree)
+function adapter.results(spec, result, tree)
   local success, data = pcall(lib.files.read, result.output)
   if not success then
     return {}
   end
   local lines = vim.split(data, '\n')
-  local tests = parser.parse_lines(tree, lines, outline)
+  local tests = parser.parse_lines(tree, lines, outline, spec.context.output_files)
   return tests
 end
 

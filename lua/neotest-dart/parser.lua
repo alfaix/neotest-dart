@@ -151,11 +151,9 @@ end
 
 ---@param test_result table dart test result
 ---@param unparsable_lines table lines that was not possible to convert to json
----@param opts table?
+---@param output_file {path: string, content: string?} written only when content changes
 ---@returns string path to output file
-local function prepare_neotest_output(test_result, unparsable_lines, opts)
-  opts = opts or {}
-  local fname = async.fn.tempname()
+local function prepare_neotest_output(test_result, unparsable_lines, output_file)
   local file_output = {}
   if unparsable_lines then
     for _, line in ipairs(unparsable_lines) do
@@ -184,11 +182,12 @@ local function prepare_neotest_output(test_result, unparsable_lines, opts)
     table.insert(file_output, 'Elapsed: ' .. test_time)
   end
   local flatten = vim.iter(file_output):flatten():totable()
-  if opts.write_output == false then
-    return table.concat(flatten, '\n')
+  local content = table.concat(flatten, '\n')
+  if content ~= output_file.content then
+    async.fn.writefile(flatten, output_file.path, 'b')
+    output_file.content = content
   end
-  vim.fn.writefile(flatten, fname, 'b')
-  return fname
+  return output_file.path
 end
 
 local function get_diagnostic_line(text)
@@ -278,7 +277,9 @@ local function merge_test_results(test_results)
   return merged
 end
 
-M.parse_lines = function(tree, lines, outline, opts)
+---@param output_files table<string, {path: string, content: string?}>? reused across calls
+M.parse_lines = function(tree, lines, outline, output_files)
+  output_files = output_files or {}
   local runtimes_by_position, tests_by_name, unparsable_lines = marshal_test_results(lines)
   local results = {}
 
@@ -292,10 +293,11 @@ M.parse_lines = function(tree, lines, outline, opts)
       end
 
       if test_result then
+        output_files[value.id] = output_files[value.id] or { path = async.fn.tempname() }
         local neotest_result = {
           status = construct_neotest_status(test_result),
           short = highlight_as_error(test_result.message),
-          output = prepare_neotest_output(test_result, unparsable_lines, opts),
+          output = prepare_neotest_output(test_result, unparsable_lines, output_files[value.id]),
           errors = construct_diagnostic_errors(test_result),
         }
         results[value.id] = neotest_result
